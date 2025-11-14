@@ -1,18 +1,18 @@
 import { Router, Request, Response } from 'express';
 import { SQLExecutor, ExecuteQueryRequest } from '../services/sqlExecutor';
-import { SessionManager } from '../services/sessionManager';
+import { ContainerSandboxManager } from '../services/containerSandboxManager';
 
 const router = Router();
-const sessionManager = new SessionManager();
-const sqlExecutor = new SQLExecutor(sessionManager);
+const sandboxManager = new ContainerSandboxManager();
+const sqlExecutor = new SQLExecutor(sandboxManager);
 
 /**
  * POST /api/execute-query
  * Execute SQL query with DBML schema and data
  */
-router.post('/execute-query', (req: Request, res: Response) => {
+router.post('/execute-query', async (req: Request, res: Response) => {
   try {
-    const { sessionId, dbml, data, query } = req.body as ExecuteQueryRequest;
+    const { sessionId, dbml, data, query, engine } = req.body as ExecuteQueryRequest;
 
     // Validation
     if (!dbml || !query) {
@@ -39,7 +39,7 @@ router.post('/execute-query', (req: Request, res: Response) => {
     }
 
     // Execute query (sessionId is optional - will be created if not provided)
-    const result = sqlExecutor.execute({ sessionId, dbml, data, query });
+    const result = await sqlExecutor.execute({ sessionId, dbml, data, query, engine });
 
     if (result.success) {
       return res.json(result);
@@ -62,7 +62,7 @@ router.get('/health', (req: Request, res: Response) => {
   res.json({ 
     status: 'ok', 
     message: 'SQL Executor API is running',
-    activeSessions: sessionManager.getActiveSessionsCount(),
+    activeSandboxes: sandboxManager.getActiveSandboxesCount(),
   });
 });
 
@@ -70,10 +70,10 @@ router.get('/health', (req: Request, res: Response) => {
  * DELETE /api/session/:sessionId
  * Delete a session
  */
-router.delete('/session/:sessionId', (req: Request, res: Response) => {
+router.delete('/session/:sessionId', async (req: Request, res: Response) => {
   try {
     const { sessionId } = req.params;
-    sessionManager.deleteSession(sessionId);
+    await sandboxManager.deleteSandbox(sessionId);
     res.json({ success: true, message: 'Session deleted' });
   } catch (error: unknown) {
     res.status(500).json({

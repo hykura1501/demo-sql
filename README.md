@@ -1,6 +1,6 @@
 # RunSQL - SQL Database Management Tool
 
-A web-based SQL query tool that allows you to define database schemas using DBML, insert data, and execute SQL queries in an in-memory database.
+A web-based SQL query tool that allows you to define database schemas using DBML, seed data, and execute SQL queries inside disposable Docker sandboxes.
 
 ## 🏗️ Architecture
 
@@ -11,8 +11,9 @@ A web-based SQL query tool that allows you to define database schemas using DBML
 
 ### Backend (Node.js + Express + TypeScript)
 - **Location**: `backend/`
-- **Tech Stack**: Express, TypeScript, better-sqlite3
+- **Tech Stack**: Express, TypeScript, Docker (wodby/postgres), dockerode, pg
 - **Port**: 3001
+- **Prerequisites**: Docker daemon running locally
 
 ## 🚀 Quick Start
 
@@ -40,7 +41,7 @@ Frontend will run on `http://localhost:5173`
 
 - ✅ Define database structure using DBML syntax
 - ✅ Insert and manage data through UI
-- ✅ Execute SQL queries (SELECT only for security)
+- ✅ Execute SQL queries (full DDL/DML supported inside sandbox)
 - ✅ View query results in real-time
 - ✅ See execution time for queries
 - ✅ Error handling and validation
@@ -48,9 +49,9 @@ Frontend will run on `http://localhost:5173`
 ## 🔧 How It Works
 
 1. **DBML Parsing**: Backend parses DBML code to extract table definitions
-2. **Schema Creation**: Creates SQLite tables in-memory based on DBML
-3. **Data Insertion**: Inserts data from frontend into tables
-4. **Query Execution**: Executes SQL queries and returns results
+2. **Sandbox Provisioning**: Backend creates (or reuses) a PostgreSQL container per session
+3. **Schema Creation & Data Seeding**: DBML-generated SQL and sample data are applied inside the container
+4. **Query Execution**: Arbitrary SQL runs inside the sandbox and returns results
 5. **Result Display**: Frontend displays results in a table format
 
 ## 📡 API Endpoints
@@ -62,6 +63,8 @@ Execute SQL query with DBML schema and data.
 **Request:**
 ```json
 {
+  "sessionId": "sandbox_1731500000000_abcd1234",
+  "engine": "postgres",
   "dbml": "Table users { id integer [primary key] ... }",
   "data": {
     "users": [{ "id": 1, "username": "John" }]
@@ -76,15 +79,18 @@ Execute SQL query with DBML schema and data.
   "success": true,
   "rows": [...],
   "columns": ["id", "username"],
-  "executionTime": 1.23
+  "executionTime": 1.23,
+  "sessionId": "sandbox_1731500000000_abcd1234",
+  "engine": "postgres"
 }
 ```
 
 ## 🛡️ Security
 
-- Only SELECT queries are allowed (no DROP, DELETE, UPDATE, etc.)
-- SQL injection protection through query validation
-- In-memory database (isolated per request)
+- Mỗi session chạy trong container PostgreSQL riêng biệt
+- Container bị destroy khi hết hạn TTL hoặc bị xoá thủ công
+- DB credentials sandbox (`sandbox`/`sandbox`) không lộ ra ngoài
+- Tương lai: hạn chế tài nguyên (CPU/memory) cho từng container qua Docker/Kubernetes
 
 ## 📁 Project Structure
 
@@ -108,9 +114,9 @@ demo/
 
 ## 🎯 Next Steps
 
-- [ ] Add support for more SQL operations
-- [ ] Add database export functionality
-- [ ] Improve DBML parser (support more features)
-- [ ] Add query history
-- [ ] Add syntax highlighting for SQL/DBML
+- [ ] Bổ sung tuỳ chọn engine khác (MySQL, SQL Server) với sandbox tương ứng
+- [ ] Tích hợp job queue để thực thi truy vấn bất đồng bộ khi tải cao
+- [ ] Cải thiện DBML parser (mapping type đa engine, constraint nâng cao)
+- [ ] Thêm query history & audit trail
+- [ ] Giới hạn resource/quyền thông qua seccomp/AppArmor profiles
 

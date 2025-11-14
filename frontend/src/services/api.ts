@@ -5,6 +5,7 @@ export interface ExecuteQueryRequest {
   dbml: string;
   data: Record<string, any[]>;
   query: string;
+  engine?: 'postgres';
 }
 
 export interface ExecuteQueryResponse {
@@ -14,6 +15,7 @@ export interface ExecuteQueryResponse {
   executionTime?: number;
   error?: string;
   sessionId?: string;
+  engine?: 'postgres';
 }
 
 /**

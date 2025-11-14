@@ -8,93 +8,82 @@
 - ❌ Không scale được cho nhiều user đồng thời
 - ❌ Phải parse DBML và insert data mỗi lần
 
-## Giải pháp mới: Session-based Architecture
+## Giải pháp hiện tại: Containerized Sandboxes
 
-### Kiến trúc
+### Kiến trúc tổng quan
 
 ```
-User Request → Session Manager → File-based SQLite Database
-                ↓
-         Session Pool (in-memory)
-                ↓
-         Auto Cleanup (30min timeout)
+User Request → SQL Executor → Container Sandbox Manager → Docker Engine
+                                           ↓
+                                  PostgreSQL Container (per session)
+                                           ↓
+                                    Auto Cleanup (TTL-based)
 ```
 
-### Lợi ích
+### Lợi ích chính
 
-✅ **Performance**: 
-- Database được tạo 1 lần, reuse cho nhiều queries
-- Không cần parse DBML và insert data mỗi lần
-- Connection pooling
+✅ **Isolation mạnh**: mỗi session chạy trong container riêng, giới hạn ảnh hưởng của truy vấn DDL/DML nguy hiểm.  
+✅ **Hỗ trợ truy vấn tùy ý**: cho phép DDL/DML phức tạp, phù hợp bài thi thực tế.  
+✅ **Seed data linh hoạt**: DBML được parse và apply trực tiếp vào PostgreSQL trước khi chạy query.  
+✅ **Quản lý vòng đời rõ ràng**: TTL dọn dẹp container tự động, tránh rò rỉ tài nguyên.  
+✅ **Ready for multi-engine**: đã có abstraction sẵn cho `engine`, dễ mở rộng thêm MySQL, SQL Server.
 
-✅ **Scalability**:
-- Mỗi user có database riêng (isolated)
-- Hỗ trợ hàng trăm user đồng thời
-- File-based SQLite (không giới hạn bởi RAM)
+### Flow xử lý
 
-✅ **Session Management**:
-- Tự động cleanup sessions cũ (30 phút timeout)
-- Có thể quản lý và monitor sessions
-- Session persistence giữa các requests
+1. **Tạo session / sandbox**  
+   - Request đầu tiên không có `sessionId`: hệ thống khởi tạo container mới (image `wodby/postgres`).  
+   - DBML được chuyển thành lệnh `CREATE TABLE`, seed dữ liệu qua `pg` client.
 
-### Cách hoạt động
+2. **Tái sử dụng session**  
+   - Request tiếp theo gửi kèm `sessionId`: SQLExecutor kiểm tra diff schema/data.  
+   - Nếu DBML hoặc sample data thay đổi → container cũ bị huỷ, tạo lại sandbox mới.
 
-1. **First Request**: 
-   - User gửi request không có `sessionId`
-   - Server tạo session mới + database file
-   - Trả về `sessionId` cho client
+3. **Cleanup**  
+   - Sandbox không hoạt động quá TTL (mặc định 60 phút) sẽ bị stop & remove.  
+   - API `/api/session/:id` cho phép huỷ thủ công.
 
-2. **Subsequent Requests**:
-   - Client gửi `sessionId` trong request
-   - Server reuse database đã có
-   - Chỉ update nếu DBML/data thay đổi
+### API Payload (hiện tại)
 
-3. **Auto Cleanup**:
-   - Sessions không dùng > 30 phút sẽ bị xóa
-   - Database files được cleanup tự động
-   - Chạy mỗi 5 phút
-
-### API Changes
-
-**Request (có thể có sessionId):**
 ```json
 {
-  "sessionId": "session_1234567890_abc", // optional
+  "sessionId": "sandbox_1731500000000_abcd1234",
+  "engine": "postgres",
   "dbml": "...",
   "data": {...},
   "query": "SELECT * FROM users"
 }
 ```
 
-**Response (trả về sessionId):**
 ```json
 {
   "success": true,
   "rows": [...],
-  "sessionId": "session_1234567890_abc"
+  "engine": "postgres",
+  "sessionId": "sandbox_1731500000000_abcd1234"
 }
 ```
 
-### Performance Comparison
-
-| Metric | Old (In-memory) | New (Session-based) |
-|--------|----------------|---------------------|
-| First query | ~50ms | ~50ms |
-| Subsequent queries | ~50ms | ~5ms |
-| Memory per user | ~10MB (per request) | ~1MB (persistent) |
-| Max concurrent users | ~50 | ~500+ |
-
 ### Monitoring
 
-- `GET /api/health` - Xem số active sessions
-- `DELETE /api/session/:sessionId` - Xóa session thủ công
+- `GET /api/health` - Thống kê số container đang hoạt động.
+- `DELETE /api/session/:sessionId` - Huỷ sandbox thủ công.
+- Docker metrics (cAdvisor/Prometheus) để theo dõi resource usage từng container.
 
-### Tối ưu hóa thêm (Future)
+### Tham số vận hành
 
-1. **Database Connection Pooling**: Reuse connections
-2. **Redis Cache**: Cache parsed DBML schemas
-3. **Load Balancing**: Multiple server instances
-4. **Container Isolation**: Mỗi user một container (Docker/Kubernetes)
+- **TTL**: 60 phút (config trong `ContainerSandboxManager`).  
+- **Readiness timeout**: 60s để chờ PostgreSQL sẵn sàng.  
+- **Cleanup interval**: 5 phút.  
+- **Credentials**: `sandbox` / `sandbox`, database `sandbox` (mặc định).
+
+## Lessons Learned từ session-based SQLite
+
+Giải pháp SQLite session-based vẫn hữu ích cho demo nhẹ nhưng không đáp ứng được yêu cầu isolation cao. Các vấn đề chính:
+
+- Không chạy được DDL phức tạp (bị chặn để tránh ghi đè filesystem).  
+- Thiếu isolation: bug hoặc injection có thể ảnh hưởng filesystem backend.  
+- Locking và concurrency hạn chế khi hàng trăm sinh viên chạy đồng thời.  
+- Không dễ mở rộng sang engine khác.
 
 ## Chiến lược mở rộng nâng cao
 

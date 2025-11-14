@@ -1,10 +1,11 @@
-import { SessionManager } from './sessionManager';
+import { ContainerSandboxManager, SupportedEngine } from './containerSandboxManager';
 
 export interface ExecuteQueryRequest {
   sessionId?: string;
   dbml: string;
   data: Record<string, Record<string, unknown>[]>; // { tableName: [rows...] }
   query: string;
+  engine?: SupportedEngine;
 }
 
 export interface ExecuteQueryResponse {
@@ -14,44 +15,37 @@ export interface ExecuteQueryResponse {
   executionTime?: number;
   error?: string;
   sessionId?: string;
+  engine?: SupportedEngine;
 }
 
 /**
  * SQL Executor Service
- * Uses session-based approach for better scalability
+ * Runs queries inside isolated container sandboxes
  */
 export class SQLExecutor {
-  private sessionManager: SessionManager;
+  private sandboxManager: ContainerSandboxManager;
 
-  constructor(sessionManager: SessionManager) {
-    this.sessionManager = sessionManager;
+  constructor(sandboxManager: ContainerSandboxManager) {
+    this.sandboxManager = sandboxManager;
   }
 
   /**
-   * Execute SQL query with DBML schema and data
-   * Uses session-based approach for better performance
+   * Execute SQL query within sandbox container
    */
-  execute(request: ExecuteQueryRequest): ExecuteQueryResponse {
+  async execute(request: ExecuteQueryRequest): Promise<ExecuteQueryResponse> {
     const startTime = Date.now();
 
     try {
-      // Get or create session
-      const sessionId = this.sessionManager.getOrCreateSession(
-        request.sessionId || '',
-        request.dbml,
-        request.data
-      );
+      // Get or create sandbox for session
+      const sandbox = await this.sandboxManager.getOrCreateSandbox({
+        sessionId: request.sessionId,
+        dbml: request.dbml,
+        data: request.data,
+        engine: request.engine,
+      });
 
-      // Execute query on session database
-      const result = this.sessionManager.executeQuery(sessionId, request.query);
-      
-      if (!result) {
-        return {
-          success: false,
-          error: 'Session not found or expired',
-          executionTime: Date.now() - startTime,
-        };
-      }
+      // Execute query inside sandbox container
+      const result = await this.sandboxManager.executeQuery(sandbox.sessionId, request.query);
 
       const executionTime = Date.now() - startTime;
 
@@ -60,7 +54,8 @@ export class SQLExecutor {
         rows: result.rows,
         columns: result.columns,
         executionTime,
-        sessionId,
+        sessionId: sandbox.sessionId,
+        engine: sandbox.engine,
       };
     } catch (error: unknown) {
       return {
@@ -77,34 +72,6 @@ export class SQLExecutor {
   validateQuery(query: string): { valid: boolean; error?: string } {
     if (!query || query.trim().length === 0) {
       return { valid: false, error: 'Query cannot be empty' };
-    }
-
-    // Remove comments to find the actual SQL statement
-    let cleanedQuery = query
-      // Remove single-line comments (-- comment)
-      .replace(/--.*$/gm, '')
-      // Remove multi-line comments (/* comment */)
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .trim();
-
-    if (cleanedQuery.length === 0) {
-      return { valid: false, error: 'Query cannot be empty' };
-    }
-
-    // Basic SQL injection prevention - only allow SELECT statements
-    const trimmed = cleanedQuery.toUpperCase().trim();
-    if (!trimmed.startsWith('SELECT')) {
-      return { valid: false, error: 'Only SELECT queries are allowed' };
-    }
-
-    // Check for dangerous keywords (but allow them in comments which are already removed)
-    const dangerousKeywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE'];
-    for (const keyword of dangerousKeywords) {
-      // Use word boundary to avoid false positives (e.g., "SELECTED" shouldn't match "DELETE")
-      const regex = new RegExp(`\\b${keyword}\\b`, 'i');
-      if (regex.test(cleanedQuery)) {
-        return { valid: false, error: `Query contains forbidden keyword: ${keyword}` };
-      }
     }
 
     return { valid: true };
